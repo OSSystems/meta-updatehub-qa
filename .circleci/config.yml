@@ -1,0 +1,89 @@
+version: 2.1
+
+jobs:
+  build:
+    working_directory: /opt/build
+
+    parameters:
+      machine:
+        type: string
+      image:
+        type: string
+      branch:
+        type: string
+        default: master
+
+    docker:
+      - image: ossystems/github-actions-yocto-builder:latest
+
+    steps:
+      - run:
+          name: Prepare the container
+          command: |
+            sudo chown builder:builder /opt/build
+
+      - checkout:
+          path: meta-updatehub-qa
+
+      - run:
+          name: Checkout other required repositories
+          command: |
+            echo Cloning Poky repository
+            git clone git://git.yoctoproject.org/poky --depth 1 -b << parameters.branch >>
+            echo
+            echo Poky commit is:
+            git --git-dir poky/.git log -1
+            rm -rf poky/.git
+
+            echo Cloning openembedded/meta-openembedded repository
+            git clone git://github.com/openembedded/meta-openembedded --depth 1 -b << parameters.branch >>
+            echo
+            echo openembedded/meta-openembedded commit is:
+            git --git-dir meta-openembedded/.git log -1
+            rm -rf meta-openembedded/.git
+
+            echo Cloning UpdateHub/meta-updatehub repository
+            git clone git://github.com/UpdateHub/meta-updatehub --depth 1 -b << parameters.branch >>
+            echo
+            echo UpdateHub/meta-updatehub commit is:
+            git --git-dir meta-updatehub/.git log -1
+            rm -rf meta-updatehub/.git
+
+      - run:
+          name: Setup Yocto Project environment
+          command: |
+            source poky/oe-init-build-env build
+
+            cat \<<EOF >> conf/local.conf
+            MACHINE = "<< parameters.machine >>"
+            INHERIT += "rm_work"
+            BB_DISKMON_DIRS = ""
+            BB_GIT_SHALLOW = "1"
+            BB_GIT_SHALLOW_DEPTH = "1"
+            BB_GENERATE_SHALLOW_TARBALLS = "1"
+            EOF
+            sed -i "s/buildstats//g" conf/local.conf
+
+            bitbake-layers add-layer /opt/build/meta-openembedded/meta-oe
+            bitbake-layers add-layer /opt/build/meta-openembedded/meta-python
+            bitbake-layers add-layer /opt/build/meta-openembedded/meta-networking
+            bitbake-layers add-layer /opt/build/meta-updatehub
+            bitbake-layers add-layer /opt/build/meta-updatehub-qa
+
+      - run:
+          name: Build image << parameters.image >>
+          command: |
+            source poky/oe-init-build-env build
+
+            bitbake << parameters.image >>
+
+workflows:
+  version: 2
+  build-image:
+    jobs:
+      - build:
+          name: << matrix.image >>@<< matrix.machine >>
+          matrix:
+            parameters:
+              machine: [uh-qemu-armv5e, uh-qemu-x86-64]
+              image: [updatehub-image-base]
